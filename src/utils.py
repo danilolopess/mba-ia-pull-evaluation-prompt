@@ -1,5 +1,5 @@
 """
-Funções auxiliares para o projeto de otimização de prompts.
+    Utility functions for the prompt optimization project.
 """
 
 import os
@@ -14,39 +14,39 @@ load_dotenv()
 
 def load_yaml(file_path: str) -> Optional[Dict[str, Any]]:
     """
-    Carrega arquivo YAML.
+    Loads YAML file.
 
     Args:
-        file_path: Caminho do arquivo YAML
+        file_path: YAML file path
 
     Returns:
-        Dicionário com conteúdo do YAML ou None se erro
+        Dictionary with YAML content or None if error
     """
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
             data = yaml.safe_load(f)
         return data
     except FileNotFoundError:
-        print(f"❌ Arquivo não encontrado: {file_path}")
+        print(f"File not found: {file_path}")
         return None
     except yaml.YAMLError as e:
-        print(f"❌ Erro ao parsear YAML: {e}")
+        print(f"Error parsing YAML: {e}")
         return None
     except Exception as e:
-        print(f"❌ Erro ao carregar arquivo: {e}")
+        print(f"Error loading file: {e}")
         return None
 
 
 def save_yaml(data: Dict[str, Any], file_path: str) -> bool:
     """
-    Salva dados em arquivo YAML.
+    Saves data to YAML file.
 
     Args:
-        data: Dados para salvar
-        file_path: Caminho do arquivo de saída
+        data: Data to save
+        file_path: Output file path
 
     Returns:
-        True se sucesso, False caso contrário
+        True if successful, False otherwise
     """
     try:
         output_file = Path(file_path)
@@ -57,19 +57,19 @@ def save_yaml(data: Dict[str, Any], file_path: str) -> bool:
 
         return True
     except Exception as e:
-        print(f"❌ Erro ao salvar arquivo: {e}")
+        print(f"Error saving file: {e}")
         return False
 
 
 def check_env_vars(required_vars: list) -> bool:
     """
-    Verifica se variáveis de ambiente obrigatórias estão configuradas.
+    Checks if required environment variables are configured.
 
     Args:
-        required_vars: Lista de variáveis obrigatórias
+        required_vars: List of required variables
 
     Returns:
-        True se todas configuradas, False caso contrário
+        True if all configured, False otherwise
     """
     missing_vars = []
 
@@ -78,38 +78,38 @@ def check_env_vars(required_vars: list) -> bool:
             missing_vars.append(var)
 
     if missing_vars:
-        print("❌ Variáveis de ambiente faltando:")
+        print("Missing environment variables:")
         for var in missing_vars:
             print(f"   - {var}")
-        print("\nConfigure-as no arquivo .env antes de continuar.")
+        print("\nConfigure them in the .env file before continuing.")
         return False
 
     return True
 
 
-def format_score(score: float, threshold: float = 0.8) -> str:
+def format_score(score: float, threshold: float = 0.9) -> str:
     """
-    Formata score com indicador visual de aprovação.
+    Formats score with visual approval indicator.
 
     Args:
-        score: Score entre 0.0 e 1.0
-        threshold: Limite mínimo para aprovação
+        score: Score between 0.0 and 1.0
+        threshold: Minimum threshold for approval
 
     Returns:
-        String formatada com score e símbolo
+        Formatted string with score and symbol
     """
-    symbol = "✓" if score >= threshold else "✗"
+    symbol = "-V-" if score >= threshold else "-X-"
     return f"{score:.2f} {symbol}"
 
 
 def print_section_header(title: str, char: str = "=", width: int = 50):
     """
-    Imprime cabeçalho de seção formatado.
+    Prints formatted section header.
 
     Args:
-        title: Título da seção
-        char: Caractere para a linha
-        width: Largura da linha
+        title: Section title
+        char: Character for the line
+        width: Line width
     """
     print("\n" + char * width)
     print(title)
@@ -118,45 +118,55 @@ def print_section_header(title: str, char: str = "=", width: int = 50):
 
 def validate_prompt_structure(prompt_data: Dict[str, Any]) -> tuple[bool, list]:
     """
-    Valida estrutura básica de um prompt.
+    Validates basic structure of a prompt.
 
     Args:
-        prompt_data: Dados do prompt
+        prompt_data: Prompt data
 
     Returns:
-        (is_valid, errors) - Tupla com status e lista de erros
+        (is_valid, errors) - Tuple with status and error list
     """
     errors = []
 
     required_fields = ['description', 'system_prompt', 'version']
     for field in required_fields:
         if field not in prompt_data:
-            errors.append(f"Campo obrigatório faltando: {field}")
+            errors.append(f"Missing required field: {field}")
 
     system_prompt = prompt_data.get('system_prompt', '').strip()
     if not system_prompt:
-        errors.append("system_prompt está vazio")
+        errors.append("system_prompt is empty")
 
     if 'TODO' in system_prompt:
-        errors.append("system_prompt ainda contém TODOs")
+        errors.append("system_prompt still contains TODOs")
 
     techniques = prompt_data.get('techniques_applied', [])
     if len(techniques) < 2:
-        errors.append(f"Mínimo de 2 técnicas requeridas, encontradas: {len(techniques)}")
+        errors.append(f"Minimum of 2 techniques required, found: {len(techniques)}")
 
     return (len(errors) == 0, errors)
 
 
-def extract_json_from_response(response_text: str) -> Optional[Dict[str, Any]]:
+def extract_json_from_response(response_text) -> Optional[Dict[str, Any]]:
     """
-    Extrai JSON de uma resposta de LLM que pode conter texto adicional.
+    Extracts JSON from an LLM response that may contain additional text.
+    Handles both str and list[dict] content formats (langchain-google-genai 4.x).
 
     Args:
-        response_text: Texto da resposta do LLM
+        response_text: LLM response text (str or list of content parts)
 
     Returns:
-        Dicionário extraído ou None se não encontrar JSON válido
+        Extracted dictionary or None if no valid JSON found
     """
+    if isinstance(response_text, list):
+        response_text = "".join(
+            part.get("text", "") if isinstance(part, dict) else str(part)
+            for part in response_text
+        )
+
+    if not isinstance(response_text, str):
+        response_text = str(response_text)
+
     try:
         return json.loads(response_text)
     except json.JSONDecodeError:
@@ -165,8 +175,7 @@ def extract_json_from_response(response_text: str) -> Optional[Dict[str, Any]]:
 
         if start != -1 and end > start:
             try:
-                json_str = response_text[start:end]
-                return json.loads(json_str)
+                return json.loads(response_text[start:end])
             except json.JSONDecodeError:
                 pass
 
@@ -175,17 +184,16 @@ def extract_json_from_response(response_text: str) -> Optional[Dict[str, Any]]:
 
 def get_llm(model: Optional[str] = None, temperature: float = 0.0):
     """
-    Retorna uma instância de LLM configurada baseada no provider.
+    Returns a configured LLM instance based on the provider.
 
     Args:
-        model: Nome do modelo (opcional, usa LLM_MODEL do .env por padrão)
-        temperature: Temperatura para geração (padrão: 0.0 para determinístico)
+        model: Model name (optional, uses LLM_MODEL from .env by default)
 
     Returns:
-        Instância de ChatOpenAI ou ChatGoogleGenerativeAI
+        Instance of ChatOpenAI or ChatGoogleGenerativeAI
 
     Raises:
-        ValueError: Se provider não for suportado ou API key não configurada
+        ValueError: If provider is not supported or API key is not configured
     """
     provider = os.getenv('LLM_PROVIDER', 'openai').lower()
     model_name = model or os.getenv('LLM_MODEL', 'gpt-4o-mini')
@@ -196,14 +204,14 @@ def get_llm(model: Optional[str] = None, temperature: float = 0.0):
         api_key = os.getenv('OPENAI_API_KEY')
         if not api_key:
             raise ValueError(
-                "OPENAI_API_KEY não configurada no .env\n"
-                "Obtenha uma chave em: https://platform.openai.com/api-keys"
+                "OPENAI_API_KEY not configured in .env\n"
+                "Get a key at: https://platform.openai.com/api-keys"
             )
 
         return ChatOpenAI(
             model=model_name,
-            temperature=temperature,
-            api_key=api_key
+            api_key=api_key,
+            temperature=0
         )
 
     elif provider == 'google':
@@ -212,32 +220,32 @@ def get_llm(model: Optional[str] = None, temperature: float = 0.0):
         api_key = os.getenv('GOOGLE_API_KEY')
         if not api_key:
             raise ValueError(
-                "GOOGLE_API_KEY não configurada no .env\n"
-                "Obtenha uma chave em: https://aistudio.google.com/app/apikey"
+                "GOOGLE_API_KEY not configured in .env\n"
+                "Get a key at: https://aistudio.google.com/app/apikey"
             )
 
         return ChatGoogleGenerativeAI(
             model=model_name,
-            temperature=temperature,
-            google_api_key=api_key
+            api_key=api_key,
+            temperature=0
         )
 
     else:
         raise ValueError(
-            f"Provider '{provider}' não suportado.\n"
-            f"Use 'openai' ou 'google' na variável LLM_PROVIDER do .env"
+            f"Provider '{provider}' not supported.\n"
+            f"Use 'openai' or 'google' in the LLM_PROVIDER variable in .env"
         )
 
 
-def get_eval_llm(temperature: float = 0.0):
+def get_eval_llm(temperature: float = 0):
     """
-    Retorna LLM configurado especificamente para avaliação (usa EVAL_MODEL).
+    Returns LLM configured specifically for evaluation (uses EVAL_MODEL).
 
     Args:
-        temperature: Temperatura para geração
+        None
 
     Returns:
-        Instância de LLM configurada para avaliação
+        LLM instance configured for evaluation
     """
     eval_model = os.getenv('EVAL_MODEL', 'gpt-4o')
     return get_llm(model=eval_model, temperature=temperature)

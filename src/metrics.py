@@ -1,29 +1,31 @@
 """
-Módulo de métricas customizadas para avaliação de prompts.
+    COMPLETE implementation of custom metrics for prompt evaluation.
+    CHALLENGE SOLUTION
 
-Este módulo implementa métricas gerais e específicas para Bug to User Story:
+    This module implements general and specific metrics for Bug to User Story:
 
-MÉTRICAS GERAIS (3):
-1. F1-Score: Balanceamento entre Precision e Recall
-2. Clarity: Clareza e estrutura da resposta
-3. Precision: Informações corretas e relevantes
+    GENERAL METRICS (3):
+    1. F1-Score: Balance between Precision and Recall
+    2. Clarity: Response clarity and structure
+    3. Precision: Correct and relevant information
 
-MÉTRICAS ESPECÍFICAS PARA BUG TO USER STORY (4):
-4. Tone Score: Tom profissional e empático
-5. Acceptance Criteria Score: Qualidade dos critérios de aceitação
-6. User Story Format Score: Formato correto (Como... Eu quero... Para que...)
-7. Completeness Score: Completude e contexto técnico
+    SPECIFIC METRICS FOR BUG TO USER STORY (4):
+    4. Tone Score: Professional and empathetic tone
+    5. Acceptance Criteria Score: Quality of acceptance criteria
+    6. User Story Format Score: Correct format (As a... I want... So that...)
+    7. Completeness Score: Completeness and technical context
 
-Suporta múltiplos providers de LLM:
-- OpenAI (gpt-4o, gpt-4o-mini)
-- Google Gemini (gemini-2.5-flash)
+    Supports multiple LLM providers:
+    - OpenAI (gpt-5.2)
+    - Google Gemini (gemini-1.5-flash, gemini-1.5-pro)
 
-Configure o provider no arquivo .env através da variável LLM_PROVIDER.
+    Configure the provider in the .env file through the LLM_PROVIDER variable.
 """
 
 import os
 import json
 import re
+import time
 from typing import Dict, Any
 from dotenv import load_dotenv
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -34,107 +36,143 @@ load_dotenv()
 
 def get_evaluator_llm():
     """
-    Retorna o LLM configurado para avaliação.
-    Suporta OpenAI e Google Gemini baseado no .env
+    Returns the LLM configured for evaluation.
+    Supports OpenAI and Google Gemini based on .env
     """
     return get_eval_llm(temperature=0)
 
 
-def extract_json_from_response(response_text: str) -> Dict[str, Any]:
+def invoke_with_retry(llm: Any, messages: list, max_retries: int = 5, retry_delay: float = 60.0) -> Any:
     """
-    Extrai JSON de uma resposta de LLM que pode conter texto adicional.
+    Invokes LLM with exponential backoff retry for 503/429 transient errors.
+
+    Args:
+        llm: LLM instance to invoke
+        messages: List of messages to send
+        max_retries: Maximum number of retry attempts
+        retry_delay: Base delay in seconds between retries (multiplied by attempt number)
+
+    Returns:
+        LLM response object
+
+    Raises:
+        Exception: If all retries are exhausted or error is non-retryable
     """
+    for attempt in range(1, max_retries + 1):
+        try:
+            return llm.invoke(messages)
+        except Exception as e:
+            is_retryable = any(code in str(e) for code in ["503", "429", "UNAVAILABLE", "Resource has been exhausted"])
+            if is_retryable and attempt < max_retries:
+                wait = retry_delay * attempt
+                print(f"   Attempt {attempt}/{max_retries} failed (retryable). Waiting {wait:.0f}s before retry...")
+                time.sleep(wait)
+            else:
+                raise
+
+
+def extract_json_from_response(response_text) -> Dict[str, Any]:
+    """
+    Extracts JSON from an LLM response that may contain additional text.
+    Handles both str and list[dict] content formats (langchain-google-genai 4.x).
+    """
+    if isinstance(response_text, list):
+        # Multi-part response: concatenate all text parts
+        response_text = "".join(
+            part.get("text", "") if isinstance(part, dict) else str(part)
+            for part in response_text
+        )
+
+    if not isinstance(response_text, str):
+        response_text = str(response_text)
+
     try:
-        # Tentar parsear diretamente
         return json.loads(response_text)
     except json.JSONDecodeError:
-        # Tentar encontrar JSON no meio do texto
         start = response_text.find('{')
         end = response_text.rfind('}') + 1
 
         if start != -1 and end > start:
             try:
-                json_str = response_text[start:end]
-                return json.loads(json_str)
+                return json.loads(response_text[start:end])
             except json.JSONDecodeError:
                 pass
 
-        # Se não conseguir extrair, retornar valores default
-        print(f"⚠️  Não foi possível extrair JSON da resposta: {response_text[:200]}...")
-        return {"score": 0.0, "reasoning": "Erro ao processar resposta"}
+        print(f"Could not extract JSON from response: {response_text[:200]}...")
+        return {"score": 0.0, "reasoning": "Error processing response"}
 
 
 def evaluate_f1_score(question: str, answer: str, reference: str) -> Dict[str, Any]:
     """
-    Calcula F1-Score usando LLM-as-Judge.
+    Calculates F1-Score using LLM-as-Judge.
 
     F1-Score = 2 * (Precision * Recall) / (Precision + Recall)
 
     Args:
-        question: Pergunta feita pelo usuário
-        answer: Resposta gerada pelo prompt
-        reference: Resposta esperada (ground truth)
+        question: Question asked by the user
+        answer: Answer generated by the prompt
+        reference: Expected answer (ground truth)
 
     Returns:
-        Dict com score e reasoning:
+        Dict with score and reasoning:
         {
             "score": 0.95,
             "precision": 0.9,
             "recall": 0.99,
-            "reasoning": "Explicação do LLM..."
+            "reasoning": "LLM explanation..."
         }
     """
     evaluator_prompt = f"""
-Você é um avaliador especializado em medir a qualidade de respostas geradas por IA.
+    You are an evaluator specialized in measuring the quality of AI-generated responses.
 
-Sua tarefa é calcular PRECISION e RECALL para determinar o F1-Score.
+    Your task is to calculate PRECISION and RECALL to determine the F1-Score.
 
-PERGUNTA DO USUÁRIO:
-{question}
+    USER QUESTION:
+    {question}
 
-RESPOSTA ESPERADA (Ground Truth):
-{reference}
+    EXPECTED ANSWER (Ground Truth):
+    {reference}
 
-RESPOSTA GERADA PELO MODELO:
-{answer}
+    ANSWER GENERATED BY MODEL:
+    {answer}
 
-INSTRUÇÕES:
+    INSTRUCTIONS:
 
-1. PRECISION (0.0 a 1.0):
-   - Quantas informações na resposta gerada são CORRETAS e RELEVANTES?
-   - Penalizar informações incorretas, inventadas ou desnecessárias
-   - 1.0 = todas informações são corretas e relevantes
-   - 0.0 = nenhuma informação é correta ou relevante
+    1. PRECISION (0.0 to 1.0):
+    - How much information in the generated answer is CORRECT and RELEVANT?
+    - Penalize incorrect, invented or unnecessary information
+    - 1.0 = all information is correct and relevant
+    - 0.0 = no information is correct or relevant
 
-2. RECALL (0.0 a 1.0):
-   - Quantas informações da resposta esperada estão PRESENTES na resposta gerada?
-   - Penalizar informações importantes que foram omitidas
-   - 1.0 = todas informações importantes estão presentes
-   - 0.0 = nenhuma informação importante está presente
+    2. RECALL (0.0 to 1.0):
+    - How much information from the expected answer is PRESENT in the generated answer?
+    - Penalize important information that was omitted
+    - 1.0 = all important information is present
+    - 0.0 = no important information is present
 
-3. RACIOCÍNIO:
-   - Explique brevemente sua avaliação
-   - Cite exemplos específicos do que estava correto/incorreto
+    3. REASONING:
+    - Briefly explain your evaluation
+    - Cite specific examples of what was correct/incorrect
 
-IMPORTANTE: Retorne APENAS um objeto JSON válido no formato:
-{{
-  "precision": <valor entre 0.0 e 1.0>,
-  "recall": <valor entre 0.0 e 1.0>,
-  "reasoning": "<sua explicação em até 100 palavras>"
-}}
+    IMPORTANT: Return ONLY a valid JSON object in the format:
+    {{
+    "precision": <value between 0.0 and 1.0>,
+    "recall": <value between 0.0 and 1.0>,
+    "reasoning": "<your explanation in up to 100 words>"
+    }}
 
-NÃO adicione nenhum texto antes ou depois do JSON.
-"""
+    DO NOT add any text before or after the JSON.
+    """
 
     try:
         llm = get_evaluator_llm()
-        response = llm.invoke([HumanMessage(content=evaluator_prompt)])
+        response = invoke_with_retry(llm, [HumanMessage(content=evaluator_prompt)])
         result = extract_json_from_response(response.content)
 
         precision = float(result.get("precision", 0.0))
         recall = float(result.get("recall", 0.0))
 
-        # Calcular F1-Score
+        # Calculate F1-Score
         if (precision + recall) > 0:
             f1_score = 2 * (precision * recall) / (precision + recall)
         else:
@@ -148,84 +186,84 @@ NÃO adicione nenhum texto antes ou depois do JSON.
         }
 
     except Exception as e:
-        print(f"❌ Erro ao avaliar F1-Score: {e}")
+        print(f"Error evaluating F1-Score: {e}")
         return {
             "score": 0.0,
             "precision": 0.0,
             "recall": 0.0,
-            "reasoning": f"Erro na avaliação: {str(e)}"
+            "reasoning": f"Evaluation error: {str(e)}"
         }
 
 
 def evaluate_clarity(question: str, answer: str, reference: str) -> Dict[str, Any]:
     """
-    Avalia a clareza e estrutura da resposta usando LLM-as-Judge.
+    Evaluates the clarity and structure of the answer using LLM-as-Judge.
 
-    Critérios:
-    - Organização e estrutura clara
-    - Linguagem simples e direta
-    - Ausência de ambiguidade
-    - Fácil de entender
+    Criteria:
+    - Clear organization and structure
+    - Simple and direct language
+    - Absence of ambiguity
+    - Easy to understand
 
     Args:
-        question: Pergunta feita pelo usuário
-        answer: Resposta gerada pelo prompt
-        reference: Resposta esperada (ground truth)
+        question: Question asked by the user
+        answer: Answer generated by the prompt
+        reference: Expected answer (ground truth)
 
     Returns:
-        Dict com score e reasoning:
+        Dict with score and reasoning:
         {
             "score": 0.92,
-            "reasoning": "Explicação do LLM..."
+            "reasoning": "LLM explanation..."
         }
     """
     evaluator_prompt = f"""
-Você é um avaliador especializado em medir a CLAREZA de respostas geradas por IA.
+    You are an evaluator specialized in measuring the CLARITY of AI-generated responses.
 
-PERGUNTA DO USUÁRIO:
-{question}
+    USER QUESTION:
+    {question}
 
-RESPOSTA GERADA PELO MODELO:
-{answer}
+    ANSWER GENERATED BY MODEL:
+    {answer}
 
-RESPOSTA ESPERADA (Referência):
-{reference}
+    EXPECTED ANSWER (Reference):
+    {reference}
 
-INSTRUÇÕES:
+    INSTRUCTIONS:
 
-Avalie a CLAREZA da resposta gerada com base nos critérios:
+    Evaluate the CLARITY of the generated answer based on the criteria:
 
-1. ORGANIZAÇÃO (0.0 a 1.0):
-   - A resposta tem estrutura lógica e bem organizada?
-   - Informações estão em ordem sensata?
+    1. ORGANIZATION (0.0 to 1.0):
+    - Does the answer have logical and well-organized structure?
+    - Is information in a sensible order?
 
-2. LINGUAGEM (0.0 a 1.0):
-   - Usa linguagem simples e direta?
-   - Evita jargões desnecessários?
-   - Fácil de entender?
+    2. LANGUAGE (0.0 to 1.0):
+    - Uses simple and direct language?
+    - Avoids unnecessary jargon?
+    - Easy to understand?
 
-3. AUSÊNCIA DE AMBIGUIDADE (0.0 a 1.0):
-   - A resposta é clara e sem ambiguidades?
-   - Não deixa dúvidas sobre o que está sendo comunicado?
+    3. ABSENCE OF AMBIGUITY (0.0 to 1.0):
+    - Is the answer clear and unambiguous?
+    - Leaves no doubts about what is being communicated?
 
-4. CONCISÃO (0.0 a 1.0):
-   - É concisa sem ser curta demais?
-   - Não tem informações redundantes?
+    4. CONCISENESS (0.0 to 1.0):
+    - Is it concise without being too short?
+    - No redundant information?
 
-Calcule a MÉDIA dos 4 critérios para obter o score final.
+    Calculate the AVERAGE of the 4 criteria to obtain the final score.
 
-IMPORTANTE: Retorne APENAS um objeto JSON válido no formato:
-{{
-  "score": <valor entre 0.0 e 1.0>,
-  "reasoning": "<explicação detalhada da avaliação em até 100 palavras>"
-}}
+    IMPORTANT: Return ONLY a valid JSON object in the format:
+    {{
+    "score": <value between 0.0 and 1.0>,
+    "reasoning": "<detailed explanation of the evaluation in up to 100 words>"
+    }}
 
-NÃO adicione nenhum texto antes ou depois do JSON.
-"""
+    DO NOT add any text before or after the JSON.
+    """
 
     try:
         llm = get_evaluator_llm()
-        response = llm.invoke([HumanMessage(content=evaluator_prompt)])
+        response = invoke_with_retry(llm, [HumanMessage(content=evaluator_prompt)])
         result = extract_json_from_response(response.content)
 
         score = float(result.get("score", 0.0))
@@ -236,83 +274,83 @@ NÃO adicione nenhum texto antes ou depois do JSON.
         }
 
     except Exception as e:
-        print(f"❌ Erro ao avaliar Clarity: {e}")
+        print(f"Error evaluating Clarity: {e}")
         return {
             "score": 0.0,
-            "reasoning": f"Erro na avaliação: {str(e)}"
+            "reasoning": f"Evaluation error: {str(e)}"
         }
 
 
 def evaluate_precision(question: str, answer: str, reference: str) -> Dict[str, Any]:
     """
-    Avalia a precisão da resposta usando LLM-as-Judge.
+    Evaluates the precision of the answer using LLM-as-Judge.
 
-    Critérios:
-    - Ausência de informações inventadas (alucinações)
-    - Resposta focada na pergunta
-    - Informações corretas e verificáveis
+    Criteria:
+    - Absence of invented information (hallucinations)
+    - Answer focused on the question
+    - Correct and verifiable information
 
     Args:
-        question: Pergunta feita pelo usuário
-        answer: Resposta gerada pelo prompt
-        reference: Resposta esperada (ground truth)
+        question: Question asked by the user
+        answer: Answer generated by the prompt
+        reference: Expected answer (ground truth)
 
     Returns:
-        Dict com score e reasoning:
+        Dict with score and reasoning:
         {
             "score": 0.98,
-            "reasoning": "Explicação do LLM..."
+            "reasoning": "LLM explanation..."
         }
     """
     
     evaluator_prompt = f"""
-Você é um avaliador especializado em detectar PRECISÃO e ALUCINAÇÕES em respostas de IA.
+    You are an evaluator specialized in detecting PRECISION and HALLUCINATIONS in AI responses.
 
-PERGUNTA DO USUÁRIO:
-{question}
+    USER QUESTION:
+    {question}
 
-RESPOSTA GERADA PELO MODELO:
-{answer}
+    ANSWER GENERATED BY MODEL:
+    {answer}
 
-RESPOSTA ESPERADA (Ground Truth):
-{reference}
+    EXPECTED ANSWER (Ground Truth):
+    {reference}
 
-INSTRUÇÕES:
+    INSTRUCTIONS:
 
-Avalie a PRECISÃO da resposta gerada:
+    Evaluate the PRECISION of the generated answer:
 
-1. AUSÊNCIA DE ALUCINAÇÕES (0.0 a 1.0):
-   - A resposta contém informações INVENTADAS ou não verificáveis?
-   - Todas as afirmações são baseadas em fatos?
-   - 1.0 = nenhuma alucinação detectada
-   - 0.0 = resposta cheia de informações inventadas
+    1. ABSENCE OF HALLUCINATIONS (0.0 to 1.0):
+    - Does the answer contain INVENTED or unverifiable information?
+    - Are all statements based on facts?
+    - 1.0 = no hallucination detected
+    - 0.0 = answer full of invented information
 
-2. FOCO NA PERGUNTA (0.0 a 1.0):
-   - A resposta responde EXATAMENTE o que foi perguntado?
-   - Não divaga ou adiciona informações não solicitadas?
-   - 1.0 = totalmente focada
-   - 0.0 = completamente fora do tópico
+    2. FOCUS ON QUESTION (0.0 to 1.0):
+    - Does the answer respond EXACTLY to what was asked?
+    - Doesn't ramble or add unsolicited information?
+    - 1.0 = totally focused
+    - 0.0 = completely off-topic
 
-3. CORREÇÃO FACTUAL (0.0 a 1.0):
-   - As informações estão CORRETAS quando comparadas com a referência?
-   - Não há erros ou imprecisões?
-   - 1.0 = todas informações corretas
-   - 0.0 = informações incorretas
+    3. FACTUAL CORRECTNESS (0.0 to 1.0):
+    - Is the information CORRECT when compared to the reference?
+    - No errors or inaccuracies?
+    - 1.0 = all information correct
+    - 0.0 = incorrect information
 
-Calcule a MÉDIA dos 3 critérios para obter o score final.
+    Calculate the AVERAGE of the 3 criteria to obtain the final score.
 
-IMPORTANTE: Retorne APENAS um objeto JSON válido no formato:
-{{
-  "score": <valor entre 0.0 e 1.0>,
-  "reasoning": "<explicação detalhada em até 100 palavras, cite exemplos>"
-}}
+    IMPORTANT: Return ONLY a valid JSON object in the format:
+    {{
+    "score": <value between 0.0 and 1.0>,
+    "reasoning": "<detailed explanation in up to 100 words, cite examples>"
+    }}
 
-NÃO adicione nenhum texto antes ou depois do JSON.
-"""
+    DO NOT add any text before or after the JSON.
+    """
 
     try:
         llm = get_evaluator_llm()
-        response = llm.invoke([HumanMessage(content=evaluator_prompt)])
+        response = invoke_with_retry(llm, [HumanMessage(content=evaluator_prompt)])
         result = extract_json_from_response(response.content)
 
         score = float(result.get("score", 0.0))
@@ -323,81 +361,81 @@ NÃO adicione nenhum texto antes ou depois do JSON.
         }
 
     except Exception as e:
-        print(f"❌ Erro ao avaliar Precision: {e}")
+        print(f"Error evaluating Precision: {e}")
         return {
             "score": 0.0,
-            "reasoning": f"Erro na avaliação: {str(e)}"
+            "reasoning": f"Evaluation error: {str(e)}"
         }
 
 
 def evaluate_tone_score(bug_report: str, user_story: str, reference: str) -> Dict[str, Any]:
     """
-    Avalia o tom da user story (profissional e empático).
+    Evaluates the tone of the user story (professional and empathetic).
 
-    Critérios específicos para Bug to User Story:
-    - Tom profissional mas não excessivamente técnico
-    - Empatia com o usuário afetado pelo bug
-    - Foco em valor de negócio, não apenas correção técnica
-    - Linguagem positiva (o que o usuário QUER fazer, não só o que não funciona)
+    Specific criteria for Bug to User Story:
+    - Professional but not overly technical tone
+    - Empathy with the user affected by the bug
+    - Focus on business value, not just technical correction
+    - Positive language (what the user WANTS to do, not just what doesn't work)
 
     Args:
-        bug_report: Descrição do bug original
-        user_story: User story gerada pelo prompt
-        reference: User story esperada (ground truth)
+        bug_report: Original bug description
+        user_story: User story generated by the prompt
+        reference: Expected user story (ground truth)
 
     Returns:
-        Dict com score e reasoning
+        Dict with score and reasoning
     """
     evaluator_prompt = f"""
-Você é um avaliador especializado em User Stories ágeis.
+    You are an evaluator specialized in Agile User Stories.
 
-BUG REPORT ORIGINAL:
-{bug_report}
+    ORIGINAL BUG REPORT:
+    {bug_report}
 
-USER STORY GERADA:
-{user_story}
+    GENERATED USER STORY:
+    {user_story}
 
-USER STORY ESPERADA (Referência):
-{reference}
+    EXPECTED USER STORY (Reference):
+    {reference}
 
-INSTRUÇÕES:
+    INSTRUCTIONS:
 
-Avalie o TOM da user story gerada com base nos critérios:
+    Evaluate the TONE of the generated user story based on the criteria:
 
-1. PROFISSIONALISMO (0.0 a 1.0):
-   - Usa linguagem profissional e apropriada para documentação?
-   - Evita jargões excessivos ou linguagem muito informal?
-   - Mantém padrão de qualidade de documentação ágil?
+    1. PROFESSIONALISM (0.0 to 1.0):
+    - Uses professional and appropriate language for documentation?
+    - Avoids excessive jargon or overly informal language?
+    - Maintains agile documentation quality standard?
 
-2. EMPATIA COM USUÁRIO (0.0 a 1.0):
-   - Demonstra compreensão do impacto do bug no usuário?
-   - Foca na necessidade/frustração do usuário?
-   - Usa linguagem centrada no usuário ("Como um... eu quero...")?
+    2. USER EMPATHY (0.0 to 1.0):
+    - Demonstrates understanding of the bug's impact on the user?
+    - Focuses on user's need/frustration?
+    - Uses user-centered language ("As a... I want...")?
 
-3. FOCO EM VALOR (0.0 a 1.0):
-   - Articula claramente o valor de negócio da solução?
-   - Vai além de "consertar o bug" e explica o benefício?
-   - Usa a estrutura "para que eu possa..." com valor real?
+    3. VALUE FOCUS (0.0 to 1.0):
+    - Clearly articulates the business value of the solution?
+    - Goes beyond "fixing the bug" and explains the benefit?
+    - Uses the structure "so that I can..." with real value?
 
-4. LINGUAGEM POSITIVA (0.0 a 1.0):
-   - Foca no que o usuário QUER fazer (não só no que está quebrado)?
-   - Tom construtivo e orientado a solução?
-   - Evita linguagem negativa ou culpabilizante?
+    4. POSITIVE LANGUAGE (0.0 to 1.0):
+    - Focuses on what the user WANTS to do (not just what's broken)?
+    - Constructive and solution-oriented tone?
+    - Avoids negative or blaming language?
 
-Calcule a MÉDIA dos 4 critérios para obter o score final.
+    Calculate the AVERAGE of the 4 criteria to obtain the final score.
 
-IMPORTANTE: Retorne APENAS um objeto JSON válido no formato:
-{{
-  "score": <valor entre 0.0 e 1.0>,
-  "reasoning": "<explicação detalhada em até 150 palavras>"
-}}
+    IMPORTANT: Return ONLY a valid JSON object in the format:
+    {{
+    "score": <value between 0.0 and 1.0>,
+    "reasoning": "<detailed explanation in up to 150 words>"
+    }}
 
-NÃO adicione nenhum texto antes ou depois do JSON.
-"""
+    DO NOT add any text before or after the JSON.
+    """
 
     try:
         llm = get_evaluator_llm()
-        response = llm.invoke([HumanMessage(content=evaluator_prompt)])
+        response = invoke_with_retry(llm, [HumanMessage(content=evaluator_prompt)])
         result = extract_json_from_response(response.content)
 
         score = float(result.get("score", 0.0))
@@ -408,84 +446,84 @@ NÃO adicione nenhum texto antes ou depois do JSON.
         }
 
     except Exception as e:
-        print(f"❌ Erro ao avaliar Tone Score: {e}")
+        print(f"Error evaluating Tone Score: {e}")
         return {
             "score": 0.0,
-            "reasoning": f"Erro na avaliação: {str(e)}"
+            "reasoning": f"Evaluation error: {str(e)}"
         }
 
 
 def evaluate_acceptance_criteria_score(bug_report: str, user_story: str, reference: str) -> Dict[str, Any]:
     """
-    Avalia a qualidade dos critérios de aceitação.
+    Evaluates the quality of acceptance criteria.
 
-    Critérios específicos:
-    - Usa formato Given-When-Then ou similar estruturado
-    - Critérios são específicos e testáveis
-    - Quantidade adequada (3-7 critérios idealmente)
-    - Cobertura completa do bug e solução
-    - Incluem cenários de edge case quando relevante
+    Specific criteria:
+    - Uses Given-When-Then format or similar structured approach
+    - Criteria are specific and testable
+    - Adequate quantity (3-7 criteria ideally)
+    - Complete coverage of bug and solution
+    - Includes edge case scenarios when relevant
 
     Args:
-        bug_report: Descrição do bug original
-        user_story: User story gerada pelo prompt
-        reference: User story esperada (ground truth)
+        bug_report: Original bug description
+        user_story: User story generated by the prompt
+        reference: Expected user story (ground truth)
 
     Returns:
-        Dict com score e reasoning
+        Dict with score and reasoning
     """
     evaluator_prompt = f"""
-Você é um avaliador especializado em Critérios de Aceitação de User Stories.
+    You are an evaluator specialized in User Story Acceptance Criteria.
 
-BUG REPORT ORIGINAL:
-{bug_report}
+    ORIGINAL BUG REPORT:
+    {bug_report}
 
-USER STORY GERADA:
-{user_story}
+    GENERATED USER STORY:
+    {user_story}
 
-USER STORY ESPERADA (Referência):
-{reference}
+    EXPECTED USER STORY (Reference):
+    {reference}
 
-INSTRUÇÕES:
+    INSTRUCTIONS:
 
-Avalie os CRITÉRIOS DE ACEITAÇÃO da user story gerada:
+    Evaluate the ACCEPTANCE CRITERIA of the generated user story:
 
-1. FORMATO ESTRUTURADO (0.0 a 1.0):
-   - Usa formato Given-When-Then ou estrutura similar?
-   - Cada critério é claramente separado e identificável?
-   - Formatação facilita leitura e entendimento?
+    1. STRUCTURED FORMAT (0.0 to 1.0):
+    - Uses Given-When-Then format or similar structure?
+    - Each criterion is clearly separated and identifiable?
+    - Formatting facilitates reading and understanding?
 
-2. ESPECIFICIDADE E TESTABILIDADE (0.0 a 1.0):
-   - Critérios são específicos e não vagos?
-   - É possível criar testes automatizados a partir deles?
-   - Evita termos ambíguos como "deve funcionar bem"?
-   - Critérios mensuráveis e verificáveis?
+    2. SPECIFICITY AND TESTABILITY (0.0 to 1.0):
+    - Are criteria specific and not vague?
+    - Is it possible to create automated tests from them?
+    - Avoids ambiguous terms like "should work well"?
+    - Measurable and verifiable criteria?
 
-3. QUANTIDADE ADEQUADA (0.0 a 1.0):
-   - Tem quantidade apropriada de critérios (nem muito, nem pouco)?
-   - Ideal: 3-7 critérios para bugs simples/médios
-   - Bugs complexos podem ter mais critérios organizados
+    3. ADEQUATE QUANTITY (0.0 to 1.0):
+    - Has appropriate number of criteria (not too many, not too few)?
+    - Ideal: 3-7 criteria for simple/medium bugs
+    - Complex bugs may have more organized criteria
 
-4. COBERTURA COMPLETA (0.0 a 1.0):
-   - Cobre todos os aspectos do bug?
-   - Inclui cenários de sucesso e erro?
-   - Considera edge cases quando relevante?
-   - Aborda validações e requisitos técnicos do bug?
+    4. COMPLETE COVERAGE (0.0 to 1.0):
+    - Covers all aspects of the bug?
+    - Includes success and error scenarios?
+    - Considers edge cases when relevant?
+    - Addresses validations and technical requirements of the bug?
 
-Calcule a MÉDIA dos 4 critérios para obter o score final.
+    Calculate the AVERAGE of the 4 criteria to obtain the final score.
 
-IMPORTANTE: Retorne APENAS um objeto JSON válido no formato:
-{{
-  "score": <valor entre 0.0 e 1.0>,
-  "reasoning": "<explicação detalhada com exemplos específicos, até 150 palavras>"
-}}
+    IMPORTANT: Return ONLY a valid JSON object in the format:
+    {{
+    "score": <value between 0.0 and 1.0>,
+    "reasoning": "<detailed explanation with specific examples, up to 150 words>"
+    }}
 
-NÃO adicione nenhum texto antes ou depois do JSON.
-"""
+    DO NOT add any text before or after the JSON.
+    """
 
     try:
         llm = get_evaluator_llm()
-        response = llm.invoke([HumanMessage(content=evaluator_prompt)])
+        response = invoke_with_retry(llm, [HumanMessage(content=evaluator_prompt)])
         result = extract_json_from_response(response.content)
 
         score = float(result.get("score", 0.0))
@@ -496,86 +534,86 @@ NÃO adicione nenhum texto antes ou depois do JSON.
         }
 
     except Exception as e:
-        print(f"❌ Erro ao avaliar Acceptance Criteria Score: {e}")
+        print(f"Error evaluating Acceptance Criteria Score: {e}")
         return {
             "score": 0.0,
-            "reasoning": f"Erro na avaliação: {str(e)}"
+            "reasoning": f"Evaluation error: {str(e)}"
         }
 
 
 def evaluate_user_story_format_score(bug_report: str, user_story: str, reference: str) -> Dict[str, Any]:
     """
-    Avalia se a user story segue o formato padrão correto.
+    Evaluates if the user story follows the correct standard format.
 
-    Formato esperado:
-    - "Como um [tipo de usuário]"
-    - "Eu quero [ação/funcionalidade]"
-    - "Para que [benefício/valor]"
-    - Critérios de Aceitação claramente separados
+    Expected format:
+    - "As a [type of user]"
+    - "I want [action/functionality]"
+    - "So that [benefit/value]"
+    - Acceptance Criteria clearly separated
 
     Args:
-        bug_report: Descrição do bug original
-        user_story: User story gerada pelo prompt
-        reference: User story esperada (ground truth)
+        bug_report: Original bug description
+        user_story: User story generated by the prompt
+        reference: Expected user story (ground truth)
 
     Returns:
-        Dict com score e reasoning
+        Dict with score and reasoning
     """
     evaluator_prompt = f"""
-Você é um avaliador especializado em formato de User Stories ágeis.
+    You are an evaluator specialized in Agile User Story format.
 
-BUG REPORT ORIGINAL:
-{bug_report}
+    ORIGINAL BUG REPORT:
+    {bug_report}
 
-USER STORY GERADA:
-{user_story}
+    GENERATED USER STORY:
+    {user_story}
 
-USER STORY ESPERADA (Referência):
-{reference}
+    EXPECTED USER STORY (Reference):
+    {reference}
 
-INSTRUÇÕES:
+    INSTRUCTIONS:
 
-Avalie o FORMATO da user story gerada:
+    Evaluate the FORMAT of the generated user story:
 
-1. TEMPLATE PADRÃO (0.0 a 1.0):
-   - Segue o formato "Como um [usuário], eu quero [ação], para que [benefício]"?
-   - Todas as três partes estão presentes e corretas?
-   - Ordem e estrutura seguem as melhores práticas?
+    1. STANDARD TEMPLATE (0.0 to 1.0):
+    - Follows the format "As a [user], I want [action], so that [benefit]"?
+    - Are all three parts present and correct?
+    - Do order and structure follow best practices?
 
-2. IDENTIFICAÇÃO DE PERSONA (0.0 a 1.0):
-   - "Como um..." identifica claramente o tipo de usuário?
-   - Persona é específica e relevante para o bug?
-   - Evita genéricos como "Como um usuário" sem contexto?
+    2. PERSONA IDENTIFICATION (0.0 to 1.0):
+    - Does "As a..." clearly identify the type of user?
+    - Is the persona specific and relevant to the bug?
+    - Avoids generics like "As a user" without context?
 
-3. AÇÃO CLARA (0.0 a 1.0):
-   - "Eu quero..." descreve claramente a ação/funcionalidade desejada?
-   - Ação é específica e relacionada ao bug?
-   - Evita descrições vagas ou muito técnicas?
+    3. CLEAR ACTION (0.0 to 1.0):
+    - Does "I want..." clearly describe the desired action/functionality?
+    - Is the action specific and related to the bug?
+    - Avoids vague or overly technical descriptions?
 
-4. BENEFÍCIO ARTICULADO (0.0 a 1.0):
-   - "Para que..." explica claramente o valor/benefício?
-   - Benefício é real e significativo (não trivial)?
-   - Conecta a ação ao valor de negócio?
+    4. ARTICULATED BENEFIT (0.0 to 1.0):
+    - Does "So that..." clearly explain the value/benefit?
+    - Is the benefit real and significant (not trivial)?
+    - Connects the action to business value?
 
-5. SEPARAÇÃO DE SEÇÕES (0.0 a 1.0):
-   - User story principal está claramente separada dos critérios?
-   - Critérios de aceitação têm seção própria?
-   - Estrutura facilita leitura e navegação?
+    5. SECTION SEPARATION (0.0 to 1.0):
+    - Is the main user story clearly separated from the criteria?
+    - Do acceptance criteria have their own section?
+    - Does structure facilitate reading and navigation?
 
-Calcule a MÉDIA dos 5 critérios para obter o score final.
+    Calculate the AVERAGE of the 5 criteria to obtain the final score.
 
-IMPORTANTE: Retorne APENAS um objeto JSON válido no formato:
-{{
-  "score": <valor entre 0.0 e 1.0>,
-  "reasoning": "<explicação detalhada com exemplos, até 150 palavras>"
-}}
+    IMPORTANT: Return ONLY a valid JSON object in the format:
+    {{
+    "score": <value between 0.0 and 1.0>,
+    "reasoning": "<detailed explanation with examples, up to 150 words>"
+    }}
 
-NÃO adicione nenhum texto antes ou depois do JSON.
-"""
+    DO NOT add any text before or after the JSON.
+    """
 
     try:
         llm = get_evaluator_llm()
-        response = llm.invoke([HumanMessage(content=evaluator_prompt)])
+        response = invoke_with_retry(llm, [HumanMessage(content=evaluator_prompt)])
         result = extract_json_from_response(response.content)
 
         score = float(result.get("score", 0.0))
@@ -586,96 +624,96 @@ NÃO adicione nenhum texto antes ou depois do JSON.
         }
 
     except Exception as e:
-        print(f"❌ Erro ao avaliar User Story Format Score: {e}")
+        print(f"Error evaluating User Story Format Score: {e}")
         return {
             "score": 0.0,
-            "reasoning": f"Erro na avaliação: {str(e)}"
+            "reasoning": f"Evaluation error: {str(e)}"
         }
 
 
 def evaluate_completeness_score(bug_report: str, user_story: str, reference: str) -> Dict[str, Any]:
     """
-    Avalia a completude da user story em relação ao bug.
+    Evaluates the completeness of the user story in relation to the bug.
 
-    Critérios específicos baseados na complexidade do bug:
-    - Bugs simples: cobre o problema básico
-    - Bugs médios: inclui contexto técnico relevante
-    - Bugs complexos: aborda múltiplos aspectos, impacto, tasks técnicas
+    Specific criteria based on bug complexity:
+    - Simple bugs: covers basic problem
+    - Medium bugs: includes relevant technical context
+    - Complex bugs: addresses multiple aspects, impact, technical tasks
 
     Args:
-        bug_report: Descrição do bug original
-        user_story: User story gerada pelo prompt
-        reference: User story esperada (ground truth)
+        bug_report: Original bug description
+        user_story: User story generated by the prompt
+        reference: Expected user story (ground truth)
 
     Returns:
-        Dict com score e reasoning
+        Dict with score and reasoning
     """
     evaluator_prompt = f"""
-Você é um avaliador especializado em completude de User Stories derivadas de bugs.
+    You are an evaluator specialized in completeness of User Stories derived from bugs.
 
-BUG REPORT ORIGINAL:
-{bug_report}
+    ORIGINAL BUG REPORT:
+    {bug_report}
 
-USER STORY GERADA:
-{user_story}
+    GENERATED USER STORY:
+    {user_story}
 
-USER STORY ESPERADA (Referência):
-{reference}
+    EXPECTED USER STORY (Reference):
+    {reference}
 
-INSTRUÇÕES:
+    INSTRUCTIONS:
 
-Avalie a COMPLETUDE da user story em relação ao bug:
+    Evaluate the COMPLETENESS of the user story in relation to the bug:
 
-1. COBERTURA DO PROBLEMA (0.0 a 1.0):
-   - A user story aborda TODOS os aspectos do bug reportado?
-   - Nenhum detalhe importante foi omitido?
-   - Se bug menciona múltiplos problemas, todos são cobertos?
+    1. PROBLEM COVERAGE (0.0 to 1.0):
+    - Does the user story address ALL aspects of the reported bug?
+    - No important details were omitted?
+    - If bug mentions multiple problems, are all covered?
 
-2. CONTEXTO TÉCNICO (0.0 a 1.0):
-   - Quando o bug inclui detalhes técnicos (logs, stack traces, endpoints):
-     * User story preserva contexto técnico relevante?
-     * Informações técnicas são incluídas de forma apropriada?
-   - Bugs simples não precisam de muito contexto técnico
-   - Bugs complexos DEVEM incluir seção de contexto técnico
+    2. TECHNICAL CONTEXT (0.0 to 1.0):
+    - When the bug includes technical details (logs, stack traces, endpoints):
+        * Does user story preserve relevant technical context?
+        * Is technical information included appropriately?
+    - Simple bugs don't need much technical context
+    - Complex bugs MUST include technical context section
 
-3. IMPACTO E SEVERIDADE (0.0 a 1.0):
-   - Se o bug menciona impacto (usuários afetados, perda financeira):
-     * User story reconhece e documenta o impacto?
-   - Severidade é refletida na priorização implícita?
-   - Bugs críticos devem ter tratamento mais detalhado
+    3. IMPACT AND SEVERITY (0.0 to 1.0):
+    - If the bug mentions impact (affected users, financial loss):
+        * Does user story recognize and document the impact?
+    - Is severity reflected in implicit prioritization?
+    - Critical bugs should have more detailed treatment
 
-4. TASKS TÉCNICAS (0.0 a 1.0):
-   - Para bugs complexos com múltiplos componentes:
-     * User story sugere tasks técnicas ou breakdown?
-   - Para bugs simples/médios:
-     * Tasks não são necessárias (não penalizar ausência)
-   - Avalie se o nível de detalhe é apropriado à complexidade
+    4. TECHNICAL TASKS (0.0 to 1.0):
+    - For complex bugs with multiple components:
+        * Does user story suggest technical tasks or breakdown?
+    - For simple/medium bugs:
+        * Tasks are not necessary (don't penalize absence)
+    - Evaluate if level of detail is appropriate to complexity
 
-5. INFORMAÇÕES ADICIONAIS RELEVANTES (0.0 a 1.0):
-   - Se bug menciona: steps to reproduce, ambiente, logs
-     * User story preserva ou referencia essas informações?
-   - Contexto de negócio importante é mantido?
-   - Sugestões de solução são apropriadas?
+    5. RELEVANT ADDITIONAL INFORMATION (0.0 to 1.0):
+    - If bug mentions: steps to reproduce, environment, logs
+        * Does user story preserve or reference this information?
+    - Is important business context maintained?
+    - Are solution suggestions appropriate?
 
-Calcule a MÉDIA dos 5 critérios para obter o score final.
+    Calculate the AVERAGE of the 5 criteria to obtain the final score.
 
-IMPORTANTE:
-- Bugs SIMPLES podem ter score alto mesmo sem muitos detalhes técnicos
-- Bugs COMPLEXOS DEVEM ter seções adicionais (contexto técnico, tasks, impacto)
-- Compare com a referência para calibrar expectativa de completude
+    IMPORTANT:
+    - SIMPLE bugs can have high score even without many technical details
+    - COMPLEX bugs MUST have additional sections (technical context, tasks, impact)
+    - Compare with reference to calibrate completeness expectation
 
-Retorne APENAS um objeto JSON válido no formato:
-{{
-  "score": <valor entre 0.0 e 1.0>,
-  "reasoning": "<explicação detalhada sobre o que foi bem coberto e o que faltou, até 200 palavras>"
-}}
+    Return ONLY a valid JSON object in the format:
+    {{
+    "score": <value between 0.0 and 1.0>,
+    "reasoning": "<detailed explanation about what was well covered and what was missing, up to 200 words>"
+    }}
 
-NÃO adicione nenhum texto antes ou depois do JSON.
-"""
+    DO NOT add any text before or after the JSON.
+    """
 
     try:
         llm = get_evaluator_llm()
-        response = llm.invoke([HumanMessage(content=evaluator_prompt)])
+        response = invoke_with_retry(llm, [HumanMessage(content=evaluator_prompt)])
         result = extract_json_from_response(response.content)
 
         score = float(result.get("score", 0.0))
@@ -686,33 +724,33 @@ NÃO adicione nenhum texto antes ou depois do JSON.
         }
 
     except Exception as e:
-        print(f"❌ Erro ao avaliar Completeness Score: {e}")
+        print(f"Error evaluating Completeness Score: {e}")
         return {
             "score": 0.0,
-            "reasoning": f"Erro na avaliação: {str(e)}"
+            "reasoning": f"Evaluation error: {str(e)}"
         }
 
 
-# Exemplo de uso e testes
+# Usage example and tests
 if __name__ == "__main__":
-    # Mostrar provider configurado
+    # Show configured provider
     provider = os.getenv("LLM_PROVIDER", "openai")
-    eval_model = os.getenv("EVAL_MODEL", "gpt-4o")
+    eval_model = os.getenv("EVAL_MODEL", "gpt-5.2")
 
     print("=" * 70)
-    print("TESTANDO MÉTRICAS CUSTOMIZADAS")
+    print("TESTING CUSTOM METRICS")
     print("=" * 70)
-    print(f"\n📊 Provider: {provider}")
-    print(f"🤖 Modelo de Avaliação: {eval_model}\n")
+    print(f"\nProvider: {provider}")
+    print(f"Evaluation Model: {eval_model}\n")
 
     print("=" * 70)
-    print("PARTE 1: MÉTRICAS GERAIS")
+    print("PART 1: GENERAL METRICS")
     print("=" * 70)
 
-    # Teste das métricas gerais
-    test_question = "Qual o horário de funcionamento da loja?"
-    test_answer = "A loja funciona de segunda a sexta das 9h às 18h."
-    test_reference = "Horário de funcionamento: Segunda a Sexta 9:00-18:00, Sábado 9:00-14:00"
+    # Test general metrics
+    test_question = "What are the store's opening hours?"
+    test_answer = "The store is open Monday to Friday from 9am to 6pm."
+    test_reference = "Opening hours: Monday to Friday 9:00-18:00, Saturday 9:00-14:00"
 
     print("\n1. F1-Score:")
     f1_result = evaluate_f1_score(test_question, test_answer, test_reference)
@@ -732,42 +770,42 @@ if __name__ == "__main__":
     print(f"   Reasoning: {precision_result['reasoning']}\n")
 
     print("=" * 70)
-    print("PARTE 2: MÉTRICAS ESPECÍFICAS PARA BUG TO USER STORY")
+    print("PART 2: SPECIFIC METRICS FOR BUG TO USER STORY")
     print("=" * 70)
 
-    # Teste das métricas específicas de Bug to User Story
-    test_bug = "Botão de adicionar ao carrinho não funciona no produto ID 1234."
-    test_user_story = """Como um cliente navegando na loja, eu quero adicionar produtos ao meu carrinho de compras, para que eu possa continuar comprando e finalizar minha compra depois.
+    # Test Bug to User Story specific metrics
+    test_bug = "Add to cart button doesn't work on product ID 1234."
+    test_user_story = """As a customer browsing the store, I want to add products to my shopping cart, so that I can continue shopping and complete my purchase later.
 
-Critérios de Aceitação:
-- Dado que estou visualizando um produto
-- Quando clico no botão "Adicionar ao Carrinho"
-- Então o produto deve ser adicionado ao carrinho
-- E devo ver uma confirmação visual
-- E o contador do carrinho deve ser atualizado"""
+    Acceptance Criteria:
+    - Given that I am viewing a product
+    - When I click the "Add to Cart" button
+    - Then the product should be added to the cart
+    - And I should see a visual confirmation
+    - And the cart counter should be updated"""
 
-    test_reference_story = test_user_story  # Usando o mesmo para teste
+    test_reference_story = test_user_story  # Using the same for testing
 
-    print("\n4. Tone Score (Tom profissional e empático):")
+    print("\n4. Tone Score (Professional and empathetic tone):")
     tone_result = evaluate_tone_score(test_bug, test_user_story, test_reference_story)
     print(f"   Score: {tone_result['score']:.2f}")
     print(f"   Reasoning: {tone_result['reasoning']}\n")
 
-    print("5. Acceptance Criteria Score (Qualidade dos critérios):")
+    print("5. Acceptance Criteria Score (Criteria quality):")
     criteria_result = evaluate_acceptance_criteria_score(test_bug, test_user_story, test_reference_story)
     print(f"   Score: {criteria_result['score']:.2f}")
     print(f"   Reasoning: {criteria_result['reasoning']}\n")
 
-    print("6. User Story Format Score (Formato correto):")
+    print("6. User Story Format Score (Correct format):")
     format_result = evaluate_user_story_format_score(test_bug, test_user_story, test_reference_story)
     print(f"   Score: {format_result['score']:.2f}")
     print(f"   Reasoning: {format_result['reasoning']}\n")
 
-    print("7. Completeness Score (Completude e contexto):")
+    print("7. Completeness Score (Completeness and context):")
     completeness_result = evaluate_completeness_score(test_bug, test_user_story, test_reference_story)
     print(f"   Score: {completeness_result['score']:.2f}")
     print(f"   Reasoning: {completeness_result['reasoning']}\n")
 
     print("=" * 70)
-    print("✅ TODOS OS TESTES CONCLUÍDOS!")
+    print("ALL TESTS COMPLETED!")
     print("=" * 70)
