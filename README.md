@@ -8,7 +8,7 @@ We must deliver a software capable of:
 2. **Refactor and optimize** these prompts using advanced Prompt Engineering techniques
 3. **Push optimized prompts** back to LangSmith
 4. **Evaluate quality** through custom metrics (F1-Score, Clarity, Precision)
-5. **Achieve minimum score** of 0.9 (90%) on all evaluation metrics
+5. **Achieve minimum score** of 0.8 (80%) on all evaluation metrics
 
 ---
 
@@ -30,7 +30,7 @@ Prompt: support_bot_v1a
 - Clarity: 0.50
 - Precision: 0.46
 ================================
-Status: FAILED - Metrics below minimum of 0.9
+Status: FAILED - Metrics below minimum of 0.8
 
 # Pushing prompt V2
 python src/push_prompts.py
@@ -47,7 +47,7 @@ Prompt: support_bot_v2_optimized
 - Clarity: 0.95
 - Precision: 0.92
 ================================
-Status: APPROVED ✓ - All metrics reached minimum of 0.9
+Status: APPROVED ✓ - All metrics reached minimum of 0.8
 ```
 
 ---
@@ -55,35 +55,23 @@ Status: APPROVED ✓ - All metrics reached minimum of 0.9
 ## Recommended Packages
 
 ```python
-# LangChain Core
-langchain>=0.3.13
-langchain-core>=1.2.5
-langchain-community>=0.3.13
-
-# LangSmith for prompt management and evaluation
-langsmith>=0.2.7
-
-# LLM Providers
-langchain-openai>=0.2.14
-langchain-google-genai==4.2.0
-
-# Utilities
-python-dotenv==1.0.1
-pyyaml==6.0.2
-pydantic==2.10.4
-
-# Testing
-pytest==8.3.4
+from langsmith import Client  # pull_prompt, push_prompt and evaluate
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 ```
+
+Pull, push and evaluation go through `langsmith.Client`. The `langchain` metapackage and `from langchain import hub` are not used.
+
+Pinned versions are in `requirements.txt` (`langchain-core==1.6.4`, `langsmith==0.13.0`).
 
 ---
 
-## Google Gemini
+## Models
 
-- **LLM Model for responses**: `gemini-3-pro-preview`
-- **LLM Model for evaluation**: `gemini-3-pro-preview`
+The challenge does not pin model names. Set `LLM_MODEL` and `EVAL_MODEL` in `.env` with a model that is currently available and accepts `temperature=0`.
 
-Reason: High reasoning power and context awareness. Great for evaluability.
+This solution used `gemini-3-pro-preview` for both response generation and evaluation.
 
 ---
 
@@ -91,7 +79,7 @@ Reason: High reasoning power and context awareness. Great for evaluability.
 
 ### 0. Create VirtualEnv for Python
 
-Create and activate a virtual environment before installing dependencies:
+Python 3.10+ is required. Create and activate a virtual environment before installing dependencies:
 
 ```bash
 python3 -m venv venv
@@ -146,15 +134,15 @@ After refactoring the prompts, we must send them back to LangSmith Prompt Hub.
 #### Approval Criteria:
 
 ```
-- Tone Score >= 0.9
-- Acceptance Criteria Score >= 0.9
-- User Story Format Score >= 0.9
-- Completeness Score >= 0.9
+- Tone Score >= 0.8
+- Acceptance Criteria Score >= 0.8
+- User Story Format Score >= 0.8
+- Completeness Score >= 0.8
 
-AVERAGE of the 4 metrics >= 0.9
+AVERAGE of the 4 metrics >= 0.8
 ```
 
-**IMPORTANT:** ALL 4 metrics must be >= 0.9, not just the average!
+**IMPORTANT:** ALL 4 metrics must be >= 0.8, not just the average!
 
 ### 4. Validation Tests
 

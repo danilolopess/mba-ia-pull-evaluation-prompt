@@ -15,11 +15,9 @@
     6. User Story Format Score: Correct format (As a... I want... So that...)
     7. Completeness Score: Completeness and technical context
 
-    Supports multiple LLM providers:
-    - OpenAI (gpt-5.2)
-    - Google Gemini (gemini-1.5-flash, gemini-1.5-pro)
-
-    Configure the provider in the .env file through the LLM_PROVIDER variable.
+    Supports OpenAI and Google Gemini.
+    Set the provider in LLM_PROVIDER and the models in LLM_MODEL / EVAL_MODEL.
+    Model names are not fixed: pick one that is currently available.
 """
 
 import os
@@ -167,7 +165,7 @@ def evaluate_f1_score(question: str, answer: str, reference: str) -> Dict[str, A
     try:
         llm = get_evaluator_llm()
         response = invoke_with_retry(llm, [HumanMessage(content=evaluator_prompt)])
-        result = extract_json_from_response(response.content)
+        result = extract_json_from_response(response.text)
 
         precision = float(result.get("precision", 0.0))
         recall = float(result.get("recall", 0.0))
@@ -264,7 +262,7 @@ def evaluate_clarity(question: str, answer: str, reference: str) -> Dict[str, An
     try:
         llm = get_evaluator_llm()
         response = invoke_with_retry(llm, [HumanMessage(content=evaluator_prompt)])
-        result = extract_json_from_response(response.content)
+        result = extract_json_from_response(response.text)
 
         score = float(result.get("score", 0.0))
 
@@ -351,7 +349,7 @@ def evaluate_precision(question: str, answer: str, reference: str) -> Dict[str, 
     try:
         llm = get_evaluator_llm()
         response = invoke_with_retry(llm, [HumanMessage(content=evaluator_prompt)])
-        result = extract_json_from_response(response.content)
+        result = extract_json_from_response(response.text)
 
         score = float(result.get("score", 0.0))
 
@@ -436,7 +434,7 @@ def evaluate_tone_score(bug_report: str, user_story: str, reference: str) -> Dic
     try:
         llm = get_evaluator_llm()
         response = invoke_with_retry(llm, [HumanMessage(content=evaluator_prompt)])
-        result = extract_json_from_response(response.content)
+        result = extract_json_from_response(response.text)
 
         score = float(result.get("score", 0.0))
 
@@ -524,7 +522,7 @@ def evaluate_acceptance_criteria_score(bug_report: str, user_story: str, referen
     try:
         llm = get_evaluator_llm()
         response = invoke_with_retry(llm, [HumanMessage(content=evaluator_prompt)])
-        result = extract_json_from_response(response.content)
+        result = extract_json_from_response(response.text)
 
         score = float(result.get("score", 0.0))
 
@@ -614,7 +612,7 @@ def evaluate_user_story_format_score(bug_report: str, user_story: str, reference
     try:
         llm = get_evaluator_llm()
         response = invoke_with_retry(llm, [HumanMessage(content=evaluator_prompt)])
-        result = extract_json_from_response(response.content)
+        result = extract_json_from_response(response.text)
 
         score = float(result.get("score", 0.0))
 
@@ -714,7 +712,7 @@ def evaluate_completeness_score(bug_report: str, user_story: str, reference: str
     try:
         llm = get_evaluator_llm()
         response = invoke_with_retry(llm, [HumanMessage(content=evaluator_prompt)])
-        result = extract_json_from_response(response.content)
+        result = extract_json_from_response(response.text)
 
         score = float(result.get("score", 0.0))
 
@@ -735,7 +733,7 @@ def evaluate_completeness_score(bug_report: str, user_story: str, reference: str
 if __name__ == "__main__":
     # Show configured provider
     provider = os.getenv("LLM_PROVIDER", "openai")
-    eval_model = os.getenv("EVAL_MODEL", "gpt-5.2")
+    eval_model = os.getenv("EVAL_MODEL", "(not set)")
 
     print("=" * 70)
     print("TESTING CUSTOM METRICS")

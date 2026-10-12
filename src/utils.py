@@ -196,7 +196,16 @@ def get_llm(model: Optional[str] = None, temperature: float = 0.0):
         ValueError: If provider is not supported or API key is not configured
     """
     provider = os.getenv('LLM_PROVIDER', 'openai').lower()
-    model_name = model or os.getenv('LLM_MODEL', 'gpt-4o-mini')
+    model_name = model or os.getenv('LLM_MODEL', '')
+
+    if not model_name:
+        raise ValueError(
+            "Nenhum modelo definido.\n"
+            "Preencha LLM_MODEL (e EVAL_MODEL) no .env com um modelo disponível\n"
+            "na documentação oficial do provider escolhido:\n"
+            "  Google -> https://ai.google.dev/gemini-api/docs/models\n"
+            "  OpenAI -> https://platform.openai.com/docs/models"
+        )
 
     if provider == 'openai':
         from langchain_openai import ChatOpenAI
@@ -247,5 +256,5 @@ def get_eval_llm(temperature: float = 0):
     Returns:
         LLM instance configured for evaluation
     """
-    eval_model = os.getenv('EVAL_MODEL', 'gpt-4o')
+    eval_model = os.getenv('EVAL_MODEL', '')
     return get_llm(model=eval_model, temperature=temperature)

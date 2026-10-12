@@ -106,7 +106,10 @@ def pull_prompt_from_langsmith(prompt_name: str) -> ChatPromptTemplate:
     try:
         print(f"   Pulling prompt from LangSmith Hub: {prompt_name}")
         client = Client()
-        prompt = client.pull_prompt(prompt_name)
+        prompt = client.pull_prompt(
+            prompt_name,
+            dangerously_pull_public_prompt=True,
+        )
         print(f"   Prompt loaded successfully")
         return prompt
 
@@ -162,7 +165,7 @@ def evaluate_prompt_on_example(
         try:
             response = chain.invoke(inputs)
             return {
-                "answer": response.content,
+                "answer": response.text,
                 "reference": outputs.get("reference", "") if isinstance(outputs, dict) else "",
                 "question": question
             }
@@ -197,12 +200,7 @@ def evaluate_prompt(
         for attempt in range(1, max_retries + 1):
             try:
                 response = chain.invoke(inputs)
-                content = response.content
-                if isinstance(content, list):
-                    content = "".join(
-                        p.get("text", "") if isinstance(p, dict) else str(p) for p in content
-                    )
-                return {"output": content}
+                return {"output": response.text}
             except Exception as e:
                 is_retryable = any(code in str(e) for code in ["503", "429", "UNAVAILABLE", "Resource has been exhausted"])
                 if is_retryable and attempt < max_retries:

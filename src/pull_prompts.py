@@ -36,7 +36,10 @@ def pull_prompts_from_langsmith():
     try:
         # Pull prompt from LangSmith Hub
         client = Client()
-        prompt = client.pull_prompt(prompt_identifier)
+        prompt = client.pull_prompt(
+            prompt_identifier,
+            dangerously_pull_public_prompt=True,
+        )
 
         # Extract the system prompt
         system_prompt = prompt.messages[0].prompt.template
